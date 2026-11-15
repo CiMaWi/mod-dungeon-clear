@@ -589,26 +589,37 @@ using DungeonClearMath::ShouldDropTrashSticky;
 // patrolling 22-38yd ahead. The walk-back loop ends by retargeting.
 TEST(DungeonClearTrashStickyTest, DropsAStickyFarBehindTheFreshPick)
 {
-    EXPECT_TRUE(ShouldDropTrashSticky(true, false, false, 90.0f, 30.0f, 15.0f));
+    EXPECT_TRUE(ShouldDropTrashSticky(true, false, false, true, 90.0f, 30.0f, 15.0f));
 }
 
 // Two roughly equidistant corridor mobs: keep the sticky, no flip-flop.
 TEST(DungeonClearTrashStickyTest, KeepsTheStickyAgainstAComparablePick)
 {
-    EXPECT_FALSE(ShouldDropTrashSticky(true, false, false, 30.0f, 22.0f, 15.0f));
-    EXPECT_FALSE(ShouldDropTrashSticky(true, false, false, 45.0f, 30.0f, 15.0f));
+    EXPECT_FALSE(ShouldDropTrashSticky(true, false, false, true, 30.0f, 22.0f, 15.0f));
+    EXPECT_FALSE(ShouldDropTrashSticky(true, false, false, true, 45.0f, 30.0f, 15.0f));
 }
 
-// A sticky already fighting the party is never abandoned.
+// tr-20261114-113223-1: the sticky Usher on the opera floor (~44yd) is NEARER than
+// the balcony Patron the trigger names (52-58yd), so the margin never fires, but the
+// corridor scan rejects it. Out of band means stale, whatever the distance.
+TEST(DungeonClearTrashStickyTest, DropsAnOutOfBandStickyEvenWhenNearer)
+{
+    EXPECT_TRUE(ShouldDropTrashSticky(true, false, false, false, 44.0f, 57.0f, 15.0f));
+    EXPECT_TRUE(ShouldDropTrashSticky(true, false, false, false, 30.0f, 22.0f, 15.0f));
+}
+
+// A sticky already fighting the party is never abandoned, in band or out.
 TEST(DungeonClearTrashStickyTest, KeepsAStickyInCombat)
 {
-    EXPECT_FALSE(ShouldDropTrashSticky(true, false, true, 90.0f, 30.0f, 15.0f));
+    EXPECT_FALSE(ShouldDropTrashSticky(true, false, true, true, 90.0f, 30.0f, 15.0f));
+    EXPECT_FALSE(ShouldDropTrashSticky(true, false, true, false, 44.0f, 57.0f, 15.0f));
 }
 
 TEST(DungeonClearTrashStickyTest, KeepsTheStickyWithNoOtherPick)
 {
-    EXPECT_FALSE(ShouldDropTrashSticky(false, false, false, 90.0f, 0.0f, 15.0f));
-    EXPECT_FALSE(ShouldDropTrashSticky(true, true, false, 90.0f, 90.0f, 15.0f));
+    EXPECT_FALSE(ShouldDropTrashSticky(false, false, false, true, 90.0f, 0.0f, 15.0f));
+    EXPECT_FALSE(ShouldDropTrashSticky(false, false, false, false, 90.0f, 0.0f, 15.0f));
+    EXPECT_FALSE(ShouldDropTrashSticky(true, true, false, false, 90.0f, 90.0f, 15.0f));
 }
 
 // ---------------------------------------------------------------------------
@@ -3642,4 +3653,30 @@ TEST(DungeonClearRoomTrashTest, TheStandWalkRoundsAPackOnlyOnItsOwnFloor)
     // Same floor, or a gentle slope across it: round the pack as before.
     EXPECT_TRUE(DungeonClearMath::StandWalkRoundsPack(-92.6f, -91.9f, 5.0f));
     EXPECT_TRUE(DungeonClearMath::StandWalkRoundsPack(-90.0f, -85.0f, 5.0f));
+}
+
+// Blizzard (Shade of Aran) is a template-unselectable static spawn with no TRIGGER
+// flag: it outlives Aran and held three Karazhan members flagged for 199s, read as a
+// LEGIT holder (tr-20261022-104155-559).
+TEST(DungeonClearStuckCombatTest, UnflaggedScriptHelpersAreUnresolvableByEntry)
+{
+    EXPECT_TRUE(DungeonClearMath::IsUnresolvableCombatHolder(true, false, 17161));
+    // Only creatures, and only listed entries.
+    EXPECT_FALSE(DungeonClearMath::IsUnresolvableCombatHolder(false, false, 17161));
+    EXPECT_FALSE(DungeonClearMath::IsUnresolvableCombatHolder(true, false, 16524));  // Aran himself
+}
+
+// The leader-assist groupmate fallback's hysteresis. Unlatched it is the plain
+// co-located threshold; latched on the member it just yielded beside, it holds out
+// to the release band, so a follower trailing the tank at 5-6yd can no longer flip
+// the rung every tick (tr-20261022-104155-559 / -193320-1035).
+TEST(DungeonClearLeaderAssistTest, GroupmateFallbackHasHysteresis)
+{
+    float const in = 5.0f, out = 15.0f;
+    EXPECT_TRUE(DungeonClearMath::LeaderAssistFallbackYields(4.2f, false, in, out));
+    EXPECT_FALSE(DungeonClearMath::LeaderAssistFallbackYields(5.6f, false, in, out));
+    EXPECT_TRUE(DungeonClearMath::LeaderAssistFallbackYields(5.6f, true, in, out));
+    EXPECT_TRUE(DungeonClearMath::LeaderAssistFallbackYields(15.0f, true, in, out));
+    // A real round-the-corner distance walks again.
+    EXPECT_FALSE(DungeonClearMath::LeaderAssistFallbackYields(15.1f, true, in, out));
 }

@@ -14,6 +14,7 @@
 #include "Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.h"
 #include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcDifficulty.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcKaraLibraryPit.h"
 #include "TestRun/DcTestDungeonRegistry.h"
 
 // Karazhan (map 532). The ten derived anchors come from BossSpawnIndex at runtime;
@@ -259,7 +260,7 @@ TEST(DcKarazhanTest, NightbaneUrnObjectiveOwnsTheEncounter)
     EXPECT_EQ(urn->kind, DungeonAnchorKind::Objective);
     EXPECT_EQ(urn->eventId, EV_NIGHTBANE);
     EXPECT_EQ(BossOrderKey(*urn), static_cast<uint32>(ORDER_NIGHTBANE_URN));
-    // Completion is the boss-state slot (11), not the DBC bit (10).
+    // Completion is the boss-state slot (10, the DBC order since AC #28315).
     EXPECT_EQ(urn->doneBossStateIndex, STATE_NIGHTBANE);
 
     // Step 0 clicks the urn, and the at-objective trigger only holds for step 0
@@ -284,25 +285,31 @@ TEST(DcKarazhanTest, NightbaneEventShape)
     EXPECT_EQ(ev->activation, EventActivation::Anchored);
     EXPECT_TRUE(ev->persistent);
     EXPECT_TRUE(ev->required);
-    ASSERT_EQ(ev->steps.size(), 4u);
+    ASSERT_EQ(ev->steps.size(), 5u);
 
-    // The urn is clicked first: nothing is summoned until it is. The party tops
-    // off while he flies the intro.
+    // The urn is clicked first: nothing is summoned until it is. Then the intro
+    // is started by hand if the urn script did not (mod-individual-progression's
+    // copy looks him up by his pre-#28315 slot). The party tops off while he
+    // flies the intro.
     EXPECT_EQ(ev->steps[0].kind, EventStepKind::UseGameObject);
     EXPECT_EQ(ev->steps[0].goEntry, GO_BLACKENED_URN);
     EXPECT_EQ(ev->steps[1].kind, EventStepKind::Custom);
-    EXPECT_EQ(ev->steps[1].hookId, DC_HOOK_RAID_MUSTER);
+    EXPECT_EQ(ev->steps[1].hookId, HOOK_KZ_NIGHTBANE_INTRO);
+    EXPECT_TRUE(ObjectiveHookRegistry::Has(HOOK_KZ_NIGHTBANE_INTRO));
+    EXPECT_GT(ev->steps[1].timeoutMs, 0u);
+    EXPECT_EQ(ev->steps[2].kind, EventStepKind::Custom);
+    EXPECT_EQ(ev->steps[2].hookId, DC_HOOK_RAID_MUSTER);
 
     // The intro wait clears on IN_PROGRESS or DONE and never rewinds (NOT_STARTED
     // is the state it is waiting OUT of).
-    EventStep const& intro = ev->steps[2];
+    EventStep const& intro = ev->steps[3];
     EXPECT_EQ(intro.bossStateId, STATE_NIGHTBANE);
     EXPECT_TRUE(intro.bossStateClearMask & DcBossStateBit(1));
     EXPECT_TRUE(intro.bossStateClearMask & DcBossStateBit(3));
     EXPECT_EQ(intro.restartOnBossStateMask, 0u);
 
     // The fight hold clears on DONE and rewinds on an evade.
-    EventStep const& fight = ev->steps[3];
+    EventStep const& fight = ev->steps[4];
     EXPECT_EQ(fight.bossStateId, STATE_NIGHTBANE);
     EXPECT_EQ(DecideBossStateGate(3, fight.bossStateClearMask, fight.restartOnBossStateMask),
               BossStateGateVerdict::Clear);
@@ -328,7 +335,7 @@ TEST(DcKarazhanTest, OperaObjectiveReplacesBarnes)
     EXPECT_EQ(opera->kind, DungeonAnchorKind::Objective);
     EXPECT_EQ(opera->eventId, EV_OPERA);
     EXPECT_EQ(BossOrderKey(*opera), static_cast<uint32>(ORDER_OPERA));
-    // Completion is the Opera slot (4), not the DBC bit (3).
+    // Completion is the Opera slot (3, the DBC order since AC #28315).
     EXPECT_EQ(opera->doneBossStateIndex, STATE_OPERA);
     // Barnes is never a boss anchor: the tank would attack a friendly NPC.
     EXPECT_EQ(FindEntry(out, NPC_BARNES), nullptr);
@@ -436,4 +443,35 @@ TEST(DcKarazhanTest, TheChessScenarioPlaysTheChessObjective)
     DcTestDungeonRegistry::Row const* whole = DcTestDungeonRegistry::Find("532");
     ASSERT_NE(whole, nullptr);
     EXPECT_STREQ(whole->token, "kara");
+}
+
+// ---- the void under the Guardian's Library (event 4, hook 65) ----------------------
+//
+// tr-20261022-194409-1044: the tank went through the library floor at the stair foot
+// and ended on unlinked castle-shell navmesh under Illhoof. Points from that run.
+TEST(DcKarazhanTest, LibraryPitBoxHoldsTheFallAndNotTheLibrary)
+{
+    using DcKaraLibraryPit::InPit;
+    EXPECT_TRUE(InPit(-11244.8f, -1879.7f, 107.4f));   // the landing under the stair foot
+    EXPECT_TRUE(InPit(-11203.2f, -1729.7f, 119.1f));   // where it wandered, under Illhoof
+    EXPECT_TRUE(InPit(-11205.0f, -1735.0f, 121.9f));   // the member teleported down to it
+
+    EXPECT_FALSE(InPit(-11244.2f, -1879.0f, 136.0f));  // the library floor it fell from
+    EXPECT_FALSE(InPit(-11210.0f, -1885.4f, 152.2f));  // the stair-top camp
+    EXPECT_FALSE(InPit(-11240.6f, -1704.3f, 179.3f));  // Illhoof
+    EXPECT_FALSE(InPit(-11170.0f, -1910.0f, 91.8f));   // the z~92 interior corridor east of it
+    EXPECT_FALSE(InPit(-11137.0f, -1917.3f, 49.8f));   // the stables
+
+    // The landing is out of the box, or the rescue would re-fire on arrival.
+    EXPECT_FALSE(InPit(DcKaraLibraryPit::LANDING_X, DcKaraLibraryPit::LANDING_Y, DcKaraLibraryPit::LANDING_Z));
+}
+
+TEST(DcKarazhanTest, LibraryPitRescueEventShape)
+{
+    DungeonEvent const* ev = DungeonEventRegistry::Find(MAP, DcKaraLibraryPit::EVENT_PIT_RESCUE);
+    ASSERT_NE(ev, nullptr);
+    ASSERT_EQ(ev->steps.size(), 1u);
+    EXPECT_EQ(ev->steps[0].hookId, DcKaraLibraryPit::HOOK_PIT_RESCUE);
+    EXPECT_EQ(ev->steps[0].kind, EventStepKind::Custom);
+    EXPECT_TRUE(ObjectiveHookRegistry::Has(DcKaraLibraryPit::HOOK_PIT_RESCUE));
 }

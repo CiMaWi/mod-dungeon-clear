@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPoolExitDecision.h"
 
 class Player;
 class Creature;
@@ -71,6 +72,23 @@ void RegisterStratholmeEvents(std::vector<DungeonEvent>& out);
 void RegisterUldamanEvents(std::vector<DungeonEvent>& out);
 void RegisterScholomanceEvents(std::vector<DungeonEvent>& out);
 void RegisterDireMaulEvents(std::vector<DungeonEvent>& out);
+void RegisterBlackfathomDeepsEvents(std::vector<DungeonEvent>& out);
+// Blackfathom Deeps (map 48) — the Forgotten Pool exit, shared with the gtests
+// (t/TestBlackfathomDeeps). The reasoning is in BlackfathomDeepsEvents.cpp.
+namespace DcBlackfathomDeeps
+{
+    constexpr uint32 EVENT_POOL_EXIT = 8;  // 3, 4, 7 were the removed Serra'kis legs
+    // Hook ids are one flat space across every dungeon; 63 is the next free one.
+    constexpr uint32 HOOK_POOL_EXIT = 63;
+    // Bound on one climb out (the Custom step's timeout): the longest floor
+    // route to the ramp is ~200yd, under a minute of swimming.
+    constexpr uint32 POOL_EXIT_TIMEOUT_MS = 120000;
+    constexpr uint32 NPC_LORGUS_JETT = 12902;
+
+    // The pool, its depth gate and the ramp out (defined beside the event).
+    DcPoolExit::Pool const& ForgottenPool();
+}
+
 // Hellfire Ramparts (map 543) final-approach gate — see HellfireRampartsEvents.cpp
 // for the measurements. Exposed so t/TestRampartsLedgeProbe can assert against the
 // real navmesh that the zone-in platform lies outside the gate; the numbers are
@@ -866,6 +884,8 @@ namespace DcVioletHold
 
 void RegisterVioletHoldEvents(std::vector<DungeonEvent>& out);
 void RegisterMoltenCoreEvents(std::vector<DungeonEvent>& out);
+void RegisterZulGurubEvents(std::vector<DungeonEvent>& out);
+void RegisterTempleOfAhnQirajEvents(std::vector<DungeonEvent>& out);
 
 // --- Halls of Stone (map 599) ---------------------------------------------
 //
@@ -5606,9 +5626,12 @@ void RegisterOculusEvents(std::vector<DungeonEvent>& out);
 // Karazhan (map 532) — the numbers the roster, the event rows, the hooks and the
 // gtests share. The reasoning is in KarazhanEvents.cpp.
 //
-// TWO INDEX SPACES, and they disagree. `BIT_*` are DungeonEncounter.dbc bits (the
-// completion mask). `STATE_*` are karazhan.h DATA_* boss-state slots, which only
-// GetBossState reads. Opera is bit 3 but slot 4; Nightbane is bit 10 but slot 11.
+// TWO INDEX SPACES. `BIT_*` are DungeonEncounter.dbc bits (the completion mask).
+// `STATE_*` are karazhan.h DATA_* boss-state slots, which only GetBossState reads.
+// Since AC #28315 the slots follow DBC order (map 532 entries 652-662, index
+// 0-10), so the two now agree; before it the Servant's Quarters rare held slot 3
+// and Opera was slot 4, Nightbane slot 11. The two names stay separate because
+// they are still read through different APIs.
 namespace DcKarazhan
 {
     constexpr uint32 MAP = 532;
@@ -5633,8 +5656,8 @@ namespace DcKarazhan
 
     // karazhan.h boss-state slots.
     constexpr int32 STATE_MOROES    = 1;
-    constexpr int32 STATE_OPERA     = 4;
-    constexpr int32 STATE_NIGHTBANE = 11;
+    constexpr int32 STATE_OPERA     = 3;
+    constexpr int32 STATE_NIGHTBANE = 10;
 
     // Clear order. Nightbane sits after Opera: the stage-to-terrace leg is the
     // cheapest place to fit the urn (+249yd of navmesh walking against +693 for
@@ -5682,6 +5705,15 @@ namespace DcKarazhan
     constexpr uint32 GO_BLACKENED_URN = 194092;
     // mod-individual-progression's go_blackened_urn refuses a clicker without it.
     constexpr uint32 ITEM_BLACKENED_URN = 24140;
+    // boss_nightbane's ACTION_START_INTRO: what go_blackened_urn sends him.
+    constexpr int32 NB_ACTION_START_INTRO = 0;
+    constexpr uint32 HOOK_KZ_NIGHTBANE_INTRO = 66;
+
+    // His spawn perch, where he sits until the intro starts and where he
+    // respawns after an evade.
+    constexpr float NB_PERCH_X = -11003.7f, NB_PERCH_Y = -1760.19f, NB_PERCH_Z = 140.253f;
+    // Farther than this from the perch, he is already flying.
+    constexpr float NB_PERCH_RADIUS = 3.0f;
 
     // Where the intro path puts him down on the Master's Terrace.
     constexpr float LANDING_X = -11142.7f, LANDING_Y = -1891.2f, LANDING_Z = 92.3f;
@@ -5712,7 +5744,7 @@ namespace DcKarazhan
 
     // karazhan.h instance data. NOT boss-state slots: the script never calls
     // SetBossState for chess, and none of it is saved.
-    constexpr uint32 DATA_CHESS_EVENT      = 9;   // NOT_STARTED 0 / IN_PROGRESS 1 / DONE 3 / SPECIAL 4
+    constexpr uint32 DATA_CHESS_EVENT      = 8;   // NOT_STARTED 0 / IN_PROGRESS 1 / DONE 3 / SPECIAL 4
     constexpr uint32 DATA_CHESS_TEAM       = 33;  // TeamId of the player who started it
     constexpr uint32 DATA_CHESS_GAME_PHASE = 35;
     constexpr uint32 CHESS_EVENT_DONE = 3;
@@ -5850,6 +5882,7 @@ void RegisterBlackrockSpireRoster(std::vector<BossRosterPatch>& t);
 void RegisterBlackwingLairRoster(std::vector<BossRosterPatch>& t);
 void RegisterDeadminesRoster(std::vector<BossRosterPatch>& t);
 void RegisterWailingCavernsRoster(std::vector<BossRosterPatch>& t);
+void RegisterBlackfathomDeepsRoster(std::vector<BossRosterPatch>& t);
 void RegisterStratholmeRoster(std::vector<BossRosterPatch>& t);
 void RegisterDireMaulRoster(std::vector<BossRosterPatch>& t);
 void RegisterUldamanRoster(std::vector<BossRosterPatch>& t);
@@ -5873,6 +5906,10 @@ void RegisterVioletHoldRoster(std::vector<BossRosterPatch>& t);
 void RegisterHallsOfStoneRoster(std::vector<BossRosterPatch>& t);
 void RegisterGundrakRoster(std::vector<BossRosterPatch>& t);
 void RegisterMoltenCoreRoster(std::vector<BossRosterPatch>& t);
+// Zul'Gurub (309): High Priestess Arlokk, summoned by the Gong of Bethekk.
+void RegisterZulGurubRoster(std::vector<BossRosterPatch>& t);
+// Temple of Ahn'Qiraj (531): Ouro, summoned when a player reaches his mound.
+void RegisterTempleOfAhnQirajRoster(std::vector<BossRosterPatch>& t);
 // Utgarde Pinnacle (575) — the ONE row that makes this dungeon runnable at all
 // (Svala, whose credit entry 26668 is a runtime UpdateEntry target with no spawn
 // row, so BossSpawnIndex drops her silently) plus the three travel objectives the

@@ -363,11 +363,20 @@ namespace DungeonClearMath
     // sticky, the walk carries that mob out of the band, the trigger drops, Advance
     // climbs back, and it repeats (tr-20260927-201144-5, Karazhan ramp to
     // Terestian: a Mana Feeder 90yd back vs an Arcane Protector patrolling ahead).
-    // Returns true to drop the sticky for the fresh pick: a different fresh pick
-    // exists, the sticky is out of combat, and the sticky is more than `margin`
-    // farther away than the fresh pick.
+    // Returns true to drop the sticky for the fresh pick when a different fresh
+    // pick exists and the sticky is out of combat, and either:
+    //  - the sticky is outside the corridor band the fresh pick came from
+    //    (`stickyInBand` false). Distance cannot see this case: on the Karazhan
+    //    opera balcony ramp (tr-20261114-113223-1) the sticky was a Skeletal Usher on
+    //    the floor below, NEARER than the balcony Patron the trigger named, so the
+    //    margin never fired, and each walk-in dragged the tank down the ramp
+    //    until the off-line rejoin struck out. Or
+    //  - the sticky is more than `margin` farther away than the fresh pick (the
+    //    fallback when band membership is unknown: pass `stickyInBand` true).
+    // Two in-band corridor mobs at comparable range keep the sticky: no flip-flop.
     bool ShouldDropTrashSticky(bool haveFresh, bool freshIsSticky, bool stickyInCombat,
-                               float stickyDist, float freshDist, float margin);
+                               bool stickyInBand, float stickyDist, float freshDist,
+                               float margin);
 
     // Orphaned-pull release gate (pure). The effective pull mode can be forced
     // OFF while a pull is still standing — a PERSISTENT anchored event takes the
@@ -668,9 +677,38 @@ namespace DungeonClearMath
     // force-clear combat in the middle of a legitimate boss fight, which is the
     // one outcome the breaker's raid stand-down exists to prevent. TRIGGER is a
     // permanent property of the creature template; selectable is encounter state.
-    inline bool IsUnresolvableCombatHolder(bool isCreature, bool isTrigger)
+    //
+    // UNFLAGGED SCRIPT HELPERS are listed by entry instead. Each row is a creature
+    // that is unselectable by template, never by encounter state, but carries no
+    // TRIGGER flag — so the airtight test above misses it. Keep every row justified.
+    //   17161 Blizzard (Shade of Aran): a STATIC spawn the Aran fight only switches
+    //         on, so it outlives Aran and keeps flagging the raid. Teardown of
+    //         tr-20261022-104155-559 read `Blizzard (Shade of Aran) 17161 7.5yd
+    //         reach LEGIT` over three members for 199s; the leader-assist fallback
+    //         walked the tank at them until the Netherspite leg stalled.
+    inline bool IsUnflaggedScriptHelper(uint32 entry)
     {
-        return isCreature && isTrigger;
+        switch (entry)
+        {
+            case 17161:  // Blizzard (Shade of Aran), Karazhan
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Leader-assist groupmate fallback, with hysteresis (DC_LEADER_ASSIST_COLOCATED_
+    // RELEASE): yield inside `colocated`, and keep yielding out to `release` for the
+    // member the rung last yielded beside. True = yield the tick to the ladder.
+    inline bool LeaderAssistFallbackYields(float memberDist, bool latchedOnMember,
+                                           float colocated, float release)
+    {
+        return memberDist <= colocated || (latchedOnMember && memberDist <= release);
+    }
+
+    inline bool IsUnresolvableCombatHolder(bool isCreature, bool isTrigger, uint32 entry = 0)
+    {
+        return isCreature && (isTrigger || IsUnflaggedScriptHelper(entry));
     }
 
     // "Can this follower attack from where it stands?" for the camp-assist handoff,

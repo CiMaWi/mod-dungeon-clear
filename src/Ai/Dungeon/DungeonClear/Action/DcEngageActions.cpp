@@ -56,6 +56,7 @@
 #include "Ai/Dungeon/DungeonClear/Util/DcDoorPolicy.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcLeaderSignal.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcMovement.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcPartyWideChain.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcPackLeashDecision.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcPartyState.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcBreadcrumb.h"
@@ -697,6 +698,9 @@ bool DungeonClearEngageTrashAction::Execute(Event /*event*/)
     GuidVector const& candidates = farTargets.empty() ? possibleTargets : farTargets;
 
     Unit* fresh = nullptr;
+    // The long-path corridor `fresh` was scanned on, when it was: the band the
+    // trigger fires on. Kept so the sticky can be tested against the same band.
+    ChunkedPathfinder::Result const* bandPath = nullptr;
     if (DC_USE_CORRIDOR_SCAN)
     {
         // Walk the cached long-path polyline. The polyline spans the full
@@ -707,6 +711,7 @@ bool DungeonClearEngageTrashAction::Execute(Event /*event*/)
             AI_VALUE(ChunkedPathfinder::Result&, DcKey::LongPath);
         if (path.reachable && !path.segments.empty())
         {
+            bandPath = &path;
             fresh = DcTargeting::FindBlockingTrashOnPath(
                 bot, path.segments, DC_CORRIDOR_LOOKAHEAD, DC_CORRIDOR_WIDTH, candidates,
                 AI_VALUE(DungeonFollowerState&, DcKey::FollowerState));
@@ -756,19 +761,36 @@ bool DungeonClearEngageTrashAction::Execute(Event /*event*/)
 
     if (!target)
     {
-        // A quiet sticky the scan has left far behind is stale: the trigger is
-        // firing for `fresh`, so walking to the sticky instead drags the tank away
-        // from the very pack that keeps the trigger live (DungeonClearMath::
-        // ShouldDropTrashSticky, tr-20260927-201144-5).
+        // A quiet sticky the scan has left behind is stale: the trigger is firing
+        // for `fresh`, so walking to the sticky instead drags the tank away from
+        // the very pack that keeps the trigger live (DungeonClearMath::
+        // ShouldDropTrashSticky, tr-20260927-201144-5). "Left behind" is first
+        // asked of the band itself: the same corridor scan, with the sticky as its
+        // only candidate. It picks the nearest in-band mob, so a sticky it passes
+        // over for a farther `fresh` is outside the band, and distance alone
+        // cannot see that (the opera-floor Usher under the Karazhan balcony ramp
+        // was nearer than the Patron ahead, tr-20261114-113223-1). With no
+        // corridor (cone fallback) membership is unknown: the margin decides.
+        bool stickyInBand = true;
+        if (sticky && fresh && fresh != sticky && !sticky->IsInCombat() && bandPath)
+        {
+            GuidVector const only{sticky->GetGUID()};
+            stickyInBand = DcTargeting::FindBlockingTrashOnPath(
+                               bot, bandPath->segments, DC_CORRIDOR_LOOKAHEAD,
+                               DC_CORRIDOR_WIDTH, only,
+                               AI_VALUE(DungeonFollowerState&, DcKey::FollowerState)) == sticky;
+        }
         if (sticky && fresh &&
             DungeonClearMath::ShouldDropTrashSticky(
-                true, fresh == sticky, sticky->IsInCombat(), bot->GetDistance(sticky),
-                bot->GetDistance(fresh), DC_TRASH_STICKY_RETARGET_MARGIN))
+                true, fresh == sticky, sticky->IsInCombat(), stickyInBand,
+                bot->GetDistance(sticky), bot->GetDistance(fresh),
+                DC_TRASH_STICKY_RETARGET_MARGIN))
         {
             LOG_DEBUG("playerbots.dungeonclear",
-                      "[DC:{}] engage trash: dropping stale sticky {} ({:.1f}yd) for the "
+                      "[DC:{}] engage trash: dropping stale sticky {} ({:.1f}yd, {}) for the "
                       "fresh pick {} ({:.1f}yd)",
                       bot->GetName(), sticky->GetGUID().ToString(), bot->GetDistance(sticky),
+                      stickyInBand ? "far behind" : "out of band",
                       fresh->GetGUID().ToString(), bot->GetDistance(fresh));
             sticky = nullptr;
         }
@@ -1711,6 +1733,72 @@ bool DungeonClearEngageActionBase::DriveEscortCreature(EventStep const& step,
     return true;
 }
 
+bool DungeonClearEngageActionBase::DriveChainStep(DungeonEvent const& ev, EventStep const& step,
+                                                  DungeonEventProgress& prog)
+{
+    if (!bot)
+        return false;
+
+    DcChainState& st = context->GetValue<DcChainState&>(DcKey::ChainState)->Get();
+    uint32 const now = getMSTime();
+    if (st.eventId != ev.id || st.mapId != ev.mapId || st.instanceId != bot->GetInstanceId())
+    {
+        st.Reset();
+        st.ev = &ev;
+        st.eventId = ev.id;
+        st.mapId = ev.mapId;
+        st.instanceId = bot->GetInstanceId();
+        st.startedMs = now;
+        st.stepIndex = prog.stepIndex;
+        st.BeginStep(now);
+        LOG_INFO("playerbots.dungeonclear",
+                 "[DC:{}] chain '{}': leader starting the chain from ({:.1f},{:.1f},{:.1f})",
+                 bot->GetName(), ev.name, bot->GetPositionX(), bot->GetPositionY(),
+                 bot->GetPositionZ());
+    }
+    // The leader's step pointer is the event progress; keep the scratch in step.
+    if (st.stepIndex != prog.stepIndex)
+    {
+        st.stepIndex = prog.stepIndex;
+        st.BeginStep(now);
+    }
+
+    switch (DcPartyWideChain::DriveStep(bot, botAI, context, ev, step, st))
+    {
+        case DcPartyWideChain::StepOutcome::Running:
+            SetPhase(context, step.swim ? "swimming" : "objective");
+            ClearStall(context);
+            return true;
+        case DcPartyWideChain::StepOutcome::Done:
+            return false;  // Drive -> RunStep gates Done (and the straggler wait)
+        case DcPartyWideChain::StepOutcome::Fell:
+            // Back at the start: re-run the chain from step 0 (the fall handler
+            // already teleported the bot there, or finalised it on the landing).
+            prog.stepIndex = st.done ? static_cast<uint32>(ev.steps.size()) : 0;
+            prog.attempts = 0;
+            prog.stepStartMs = now;
+            st.stepIndex = prog.stepIndex;
+            SetPhase(context, "objective");
+            return true;
+        case DcPartyWideChain::StepOutcome::Stalled:
+            if (DcPartyWideChain::HandleAsFall(bot, ev, st, prog.stepIndex))
+            {
+                prog.stepIndex = st.done ? static_cast<uint32>(ev.steps.size()) : 0;
+                prog.attempts = 0;
+                prog.stepStartMs = now;
+                st.stepIndex = prog.stepIndex;
+                return true;
+            }
+            StallDungeonClear(botAI,
+                              step.swim ? "Tried to swim the passage but got stuck underwater. "
+                                          "Use 'dc skip' to move on."
+                                        : "Got stuck on the crossing at " + ev.name +
+                                              ". Use 'dc skip' to move on.");
+            return true;
+    }
+    return false;
+}
+
 bool DungeonClearEngageActionBase::DriveDropInHole(EventStep const& step)
 {
     if (!bot)
@@ -2281,6 +2369,17 @@ bool DcObjectiveArriveAction::Execute(Event /*event*/)
             else if (step.kind == EventStepKind::DropInHole)
             {
                 if (DriveDropInHole(step))
+                    return true;
+            }
+            // RawPath, and every movement step of a PARTY-WIDE chain: the same
+            // argument — the raw spline / stone hop must not be cancelled by the
+            // Hold below. DriveChainStep returns false once the step is complete,
+            // so we fall through to Drive and RunStep's gate (the straggler wait
+            // on the last movement step) latches it.
+            else if (step.kind == EventStepKind::RawPath ||
+                     (ev->partyWide && IsMovementStepKind(step.kind)))
+            {
+                if (DriveChainStep(*ev, step, prog))
                     return true;
             }
             // UseItemOnGO: OWN THE TICK to drive the approach to the target GO with

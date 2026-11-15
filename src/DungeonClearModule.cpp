@@ -57,7 +57,12 @@
 #include "CreatureAI.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
+#include "Group.h"
+#include "Item.h"
+#include "ItemTemplate.h"
+#include "LootMgr.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerScript.h"
 #include "UnitScript.h"
@@ -94,6 +99,7 @@
 #include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcCombatPurge.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcPathWorker.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcStratTrapAlley.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcFirstContact.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcPullBrake.h"
 #include "Ai/Dungeon/DungeonClear/Util/DungeonClearUtil.h"
@@ -328,6 +334,57 @@ public:
     {
         DcStrategyGate::Reconcile(player);
         DcStrategyGate::ApplyEntryDefaults(player);
+    }
+};
+
+// `.dc test` loot log: every rare-or-better item a test party member receives,
+// and how — a won need/greed roll, or a direct pickup. The manager routes it to
+// the monitoring run whose party holds the looter; a no-op for anyone else.
+class DungeonClearTestRunLootScript : public PlayerScript
+{
+public:
+    DungeonClearTestRunLootScript()
+        : PlayerScript("DungeonClearTestRunLootScript", {
+            PLAYERHOOK_ON_LOOT_ITEM,
+            PLAYERHOOK_ON_GROUP_ROLL_REWARD_ITEM
+        }) {}
+
+    void OnPlayerLootItem(Player* player, Item* item, uint32 count, ObjectGuid lootguid) override
+    {
+        Report(player, item, count, "", lootguid);
+    }
+
+    void OnPlayerGroupRollRewardItem(Player* player, Item* item, uint32 count, RollVote voteType,
+                                     Roll* roll) override
+    {
+        Loot* loot = roll ? roll->getLoot() : nullptr;
+        Report(player, item, count, voteType == NEED ? "need" : "greed",
+               loot ? loot->sourceWorldObjectGUID : ObjectGuid::Empty);
+    }
+
+private:
+    static void Report(Player* player, Item* item, uint32 count, char const* roll, ObjectGuid source)
+    {
+        if (!player || !item)
+            return;
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || proto->Quality < ITEM_QUALITY_RARE)
+            return;
+
+        DcTestRunRecord::LootEntry entry;
+        entry.name = player->GetName();
+        entry.itemId = proto->ItemId;
+        entry.item = proto->Name1;
+        entry.quality = proto->Quality;
+        entry.count = count;
+        entry.roll = roll;
+        if (!source.IsEmpty())
+        {
+            entry.sourceEntry = source.GetEntry();
+            if (WorldObject* obj = ObjectAccessor::GetWorldObject(*player, source))
+                entry.source = obj->GetName();
+        }
+        DcTestRunManager::Instance().OnLoot(player, entry);
     }
 };
 
@@ -687,6 +744,14 @@ public:
 // nothing to fight down there, and despawning a critter that merely walked
 // down a slope costs nothing: the trap gates reopen on a timer, not on critter
 // kills.
+//
+// The fall test alone lost the race on the Scarlet side (sk-20261022-002111:
+// 7 Forresten stalls). A critter summoned over the alley's south-edge hole does
+// NOT fall at once: it sits at its summon z for 10-25s, attackable, and the tank
+// charged it or reach-meleed onto it and dropped through first; the critter was
+// despawned only after the tank had landed. So a critter seen anywhere in that
+// hole strip goes the moment it is seen (DcStratTrapAlley::InHoleStrip), and
+// the event "Climb out of the trap-alley pit" rescues a party that falls anyway.
 class DungeonClearStratFallenCritterScript : public AllCreatureScript
 {
 public:
@@ -704,14 +769,16 @@ public:
             return;
         constexpr float STRAT_CRITTER_FALL_YD = 6.0f;
         float const homeZ = creature->GetHomePosition().GetPositionZ();
-        if (creature->GetPositionZ() >= homeZ - STRAT_CRITTER_FALL_YD)
+        bool const overHole = DcStratTrapAlley::InHoleStrip(creature->GetPositionX(), creature->GetPositionY(),
+                                                            creature->GetPositionZ());
+        if (!overHole && creature->GetPositionZ() >= homeZ - STRAT_CRITTER_FALL_YD)
             return;
 
         LOG_INFO("playerbots.dungeonclear",
-                 "[DC] despawning fallen Stratholme critter {} (entry {}) at "
+                 "[DC] despawning {} Stratholme critter {} (entry {}) at "
                  "({:.1f},{:.1f},{:.1f}), {:.1f}yd below its summon point",
-                 creature->GetGUID().ToString(), entry, creature->GetPositionX(),
-                 creature->GetPositionY(), creature->GetPositionZ(),
+                 overHole ? "trap-alley hole" : "fallen", creature->GetGUID().ToString(), entry,
+                 creature->GetPositionX(), creature->GetPositionY(), creature->GetPositionZ(),
                  homeZ - creature->GetPositionZ());
         creature->DespawnOrUnsummon();
     }
@@ -836,6 +903,7 @@ void AddSC_dungeon_clear_module()
 {
     new DungeonClearRegistrarWorldScript();
     new DungeonClearLoginPlayerScript();
+    new DungeonClearTestRunLootScript();
     new DungeonClearPullBrakeScript();
     new DungeonClearLateJoinerScript();
     // Opening half only — the End script registers on the first world tick so
