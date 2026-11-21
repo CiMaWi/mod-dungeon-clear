@@ -31,7 +31,7 @@
 //     stall, and its MoveToHoldUntilSpawn step garrisons the tank on the mound
 //     until he is up.
 //
-// COMPLETION reads the instance boss-state slot (DATA_OURO = 8, written by
+// COMPLETION reads the instance boss-state slot (DATA_OURO = 7, written by
 // BossAI on his death) rather than a DBC bit, the same call Molten Core makes
 // for its summoned finale.
 //
@@ -45,7 +45,7 @@ namespace
     constexpr uint32 kOuro = 15517;
 
     // temple_of_ahnqiraj.h boss-state slot.
-    constexpr int32 kSlotOuro = 8;  // DATA_OURO
+    constexpr int32 kSlotOuro = 7;  // DATA_OURO; the core follows the DBC order since AzerothCore #28416
 
     // Ouro Spawner spawn (creature guid 88073), the centre of his mound.
     constexpr float kMoundX = -9173.09f, kMoundY = 2107.33f, kMoundZ = -65.0863f;
