@@ -1,10 +1,16 @@
 /*
  * mod-dungeon-clear — StayDeadAction.h
  *
- * Overrides mod-playerbots' "auto release" action so dead bots on a dungeon or
- * raid map do NOT release their spirit to the graveyard — they stay dead (a
- * corpse on the ground) until something resurrects them: a player/party rez, a
- * self-resurrect (soulstone / Reincarnation / etc.), or summon-and-revive.
+ * Overrides mod-playerbots' "auto release" action so a dead bot on a dungeon or
+ * raid map keeps its body (does not release its spirit to the graveyard) while
+ * its group can still raise it: a living member of its group in its instance of
+ * a class that can resurrect (priest, paladin, shaman, druid), or a raid
+ * regroup that can still come for its run (a live run of this module on a map
+ * that regroups on a wipe). The hold is bounded: BODY_HOLD_SECONDS (300 s) after
+ * the death at most, longer than the module's own recovery timeout. Every other
+ * body gets the stock answer (an ungrouped bot or one under a bot leader
+ * releases at once; a real player's bot waits for its player), and playerbots'
+ * rule of the dead brings the ghost back by the healer of the entrance's grave.
  * Outside instances stock auto-release always applies.
  *
  * Housed in this module (not in mod-playerbots) so the stock module stays
@@ -38,6 +44,13 @@ public:
         : AutoReleaseSpiritAction(botAI, "auto release") {}
 
     bool isUseful() override;
+
+private:
+    // The body's clock, per bot (one action object per bot, on its map thread): when the first call saw this body
+    // dead and the last call; a gap of more than a minute between calls starts a new death
+    bool bodySeen = false;
+    uint32 bodySinceMs = 0;
+    uint32 lastCallMs = 0;
 };
 
 #endif
