@@ -80,8 +80,9 @@ public:
         // to stock LootRollAction) when off. Last-registration-wins.
         creators["loot roll"] = &DungeonClearActionContext::better_loot_roll;
 
-        // Override mod-playerbots' "auto release" so dead bots stay dead instead
-        // of releasing to the graveyard. Dungeon/raid maps only, gated by
+        // Override mod-playerbots' "auto release" so a dead bot keeps its body
+        // instead of releasing to the graveyard while its group can still raise
+        // it, for a bounded time (StayDeadAction.h). Dungeon/raid maps only, gated by
         // DungeonClear.PreventBotRelease; inert (defers to stock) when that flag
         // is off or the bot is outside an instance. Last-registration-wins, so
         // this replaces the playerbots creator for every bot of this class.
