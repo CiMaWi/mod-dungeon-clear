@@ -7,7 +7,8 @@
  * a class that can resurrect (priest, paladin, shaman, druid), or a raid
  * regroup that can still come for its run (a live run of this module on a map
  * that regroups on a wipe). The hold is bounded: BODY_HOLD_SECONDS (300 s) after
- * the death at most, longer than the module's own recovery timeout. Every other
+ * the death at most, longer than the module's own recovery timeout in a 5-man
+ * (a raid's grows with its bodies and can outlast it). Every other
  * body gets the stock answer (an ungrouped bot or one under a bot leader
  * releases at once; a real player's bot waits for its player), and playerbots'
  * rule of the dead brings the ghost back by the healer of the entrance's grave.

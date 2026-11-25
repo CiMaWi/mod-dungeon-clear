@@ -20,8 +20,9 @@
 namespace
 {
     // BODY_HOLD_SECONDS (awareness AW29, a tuning value): the longest a body waits for a resurrection, counted from
-    // the first call that saw it dead. Longer than the module's own recovery timeout (PostCombatRezTimeoutSecs, 90 s,
-    // raid 180 s), so the module's recovery always ends first.
+    // the first call that saw it dead. Longer than the module's recovery timeout in a 5-man (PostCombatRezTimeoutSecs,
+    // 90 s out of combat), so that recovery ends first. A raid's budget (180 s, plus 30 s per further body up to
+    // 360 s, combat not counted) can outlast the hold: a body not raised by then releases.
     constexpr uint32 BODY_HOLD_SECONDS = 300;
     // The "often" trigger asks every few seconds while the bot is dead; a longer silence means it lived in between
     // (or was logged out), so the next call starts a new death's clock

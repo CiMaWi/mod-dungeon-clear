@@ -89,7 +89,9 @@ DungeonClear.Enable = 1
 #        resurrect (priest, paladin, shaman, druid), or a raid regroup that can
 #        still come for its run (a live clear on a raid map or the Oculus). The
 #        hold is bounded: at most 300 s after the death, longer than the
-#        recovery's own timeout (PostCombatRezTimeoutSecs). Every other body
+#        recovery's own timeout in a 5-man (PostCombatRezTimeoutSecs; a raid's
+#        grows with its bodies and can outlast the hold: a body not raised by
+#        then releases). Every other body
 #        releases as stock does (at once alone or under a bot leader; a real
 #        player's bot waits for its player), and the ghost comes back by the
 #        spirit healer of the entrance's graveyard. Bots dead in the open world
